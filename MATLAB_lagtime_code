@@ -1,0 +1,164 @@
+%% coded by Shahid Naqui University of Innsbruck
+% This is the code responsible for Plot.1 and Plot.2
+% For Plot.1 we run the code with LGR and AERIS not corrected while for Plot.2 we need to run it with the corrected AERIS instead
+
+function [REG_RR,REG_LAG] = lagtime_shahid(LGR, Aeris, max_lag)
+% function [REG_RR,REG_LAG] = lagtime_shahid(LGR, corrected_Aeris, max_lag)
+tic
+% Calculating lag-time for each 3 (three) hrs period.
+
+% The lgr referres to the CH4 channel of the LGR-instrument.
+% The goal here was to compare the CH4 of the LGR instrument and AERIS 
+% having a reference dataset to be compared to (LGR in this case) and 
+% perform the time correction on the AERIS one. 
+% max_lag (30000) is the parameter indicating the maximum lag-time to be evaluated
+
+% these two lines basically read and upload the LGR (reference) 
+% and AERIS (time correction needed) datasets
+
+% the "dir" function get a list of files in the folder specified by 
+% "infile_folder_lgr" and "infile_folder_cpec"
+% ch4*.mat means that there are random letters between ch4 and .mat
+
+filelist_lgr        = dir(fullfile(LGR, 'ch4*.mat'));
+filelist_aeris      = dir(fullfile(Aeris,'aeris*.mat'));
+%filelist_aeris      = dir(fullfile(corrected_Aeris,'corrected_aeris*.mat'));
+
+REG_LAG             = [];                                                   % this stores the results of lag-time evaluation in REG_LAG
+REG_RR              = [];                                                   % this stores the results of regression results (?) in REG_RR2
+UTC                 = [];                                                   % this stores the results of time in UTC (?)
+
+for idx = 1:numel(filelist_lgr)                                             % "numel()" mi da il numero di elementi di filelist_lgr    
+    indata_lgr      = load([LGR,filelist_lgr(idx).name]);
+    indata_aeris    = load([Aeris,filelist_aeris(idx).name]);
+    %indata_aeris    = load([corrected_Aeris,filelist_aeris(idx).name]);               % aeris has two more rows than lgr (x13 instead of x11)
+    
+    % """   Those below are to visualize the time column for the first 20 lines in the
+    %       Aeris and LGR datasets. They are to put in the command window. 
+    %       Following this, the Aeris are taken at 5Hz (.000 .200 .400 ...)
+    %        while LGR is taken at 10Hz (.000 .100 .200 .300 .400 ...)  """
+
+    % datestr(indata_lgr.data(1:20,1),'yyyy-mm-dd HH:MM:SS.FFF')
+    % datestr(indata_aeris.data(1:20,1),'yyyy-mm-dd HH:MM:SS.FFF')
+
+    % """   I need to take the lgr data evey two because I need it to be equal in
+    %       number as the Aeris one since LGR is at 10Hz and Aeris at 5Hz and
+    %       thus has one more value every two   """
+
+    indata_lgr.data = indata_lgr.data(1:2:end, :); 
+    DayDate         = floor(indata_lgr.data(1,1));
+     
+    for h_dex = 1:8    % runs from 1:8 because it's every 3 hours
+                        % data selection keys (boolean)   
+      
+        key_data    = (indata_lgr.data(:,1)>=DayDate+(h_dex-1)/8 & indata_lgr.data(:,1)<DayDate+h_dex/8);     
+        lgr_sig     = indata_lgr.data(key_data,3);       % column dependent on dataset
+        aeris_sig   = indata_aeris.data(key_data,3);      
+        tmp         = find(key_data);
+        utc(h_dex)  = indata_aeris.data(tmp(1),1);
+        
+        % find best filter and lag
+        % max_lag = 8000;
+        reg(h_dex) = find_xcorNbox(aeris_sig, lgr_sig, max_lag, 1);
+        
+        if sum(isnan(aeris_sig)) > 0.5*numel(aeris_sig)     % exchange lgr_sig with the aeris_sig
+            reg(h_dex).best_lag        = NaN;
+            reg(h_dex).best_boxwidth   = NaN;
+        end
+        
+        %apply filtering and lagging to fast CO2 signal to match slow signal
+        %match_sig = lagNbox(fast_sig, reg.best_lag, reg.best_boxwidth);
+    end
+   
+    REG_LAG     = vertcat(REG_LAG,reg.best_lag);
+    REG_RR      = vertcat(REG_RR,reg.r_maxmax);
+    UTC         = vertcat(UTC,utc');                % UTC = vertcat(UTC,utc'); UTC is a 54x48 (days x half_hour) matrix = 2592 elements
+
+    % UTC must be reshaped to a 2592x1 matrix if I want to plot it against
+    % REG_RR and REG_LAG
+    % UTC_reshaped = reshape(UTC, [], 1);
+    % UTC = UTC';
+    
+end
+
+temp.time   = UTC;
+temp.lag    = REG_LAG;
+temp.corr   = REG_RR;
+
+figure;
+plot(datetime(UTC,'ConvertFrom','datenum'),REG_LAG./5,'.red');
+title('Lag-time between Aeris and LGR each 3 hour interval');
+xlabel('Time [UTC]');
+ylabel('Lag-time [s]');
+
+%%
+
+%save('E:\CH4_dataprocessing\lagtime_periods', '-struct', 'temp');
+%save('C:\Users\shahi\OneDrive\Desktop\Thesis Innsbruck 2024\lagtime analysis\lagtime periods', '-struct', 'temp');
+
+% plots
+% figure;
+% plot(datetime(UTC,'ConvertFrom','datenum'),REG_RR);
+% title('R^2 for CH_4_{ (Aeris)} vs CH_4_{ (LGR)}');
+% xlabel('Time [UTC]');
+% ylabel('Correlation Coefficient');
+
+
+
+% Interactive point selection
+    % disp('Click on points in the plot to get their coordinates. Press Enter when done.');
+    % [x, y] = ginput;
+    % 
+    % % Display and store selected points
+    % selected_points = cell(length(x), 2);
+    % for i = 1:length(x)
+    %     selected_time = datetime(x(i), 'ConvertFrom', 'datenum');
+    %     selected_lag = y(i) * 5; % Convert back to original scale
+    %     selected_points{i, 1} = datestr(selected_time, 'yyyy-mm-dd HH:MM:SS');
+    %     selected_points{i, 2} = selected_lag;
+    %     fprintf('Time: %s, Lag-time: %.2f s\n', selected_points{i, 1}, selected_points{i, 2});
+    % end
+    % 
+    % % Convert cell array to table for better readability if needed
+    % selected_points_table = cell2table(selected_points, 'VariableNames', {'Time', 'LagTime'});
+    % 
+    % disp('Selected points in table format:');
+    % disp(selected_points_table);
+
+
+% Aggregate all the data points
+% all_lag_times = REG_LAG(:);
+% all_utc_times = UTC(:);
+% 
+% % Remove NaNs if any
+% valid_indices = ~isnan(all_lag_times);
+% all_lag_times = all_lag_times(valid_indices);
+% all_utc_times = all_utc_times(valid_indices);
+% 
+% % Fit a linear model to the aggregated data
+% p = polyfit(all_utc_times, all_lag_times, 1);
+% 
+% % The slope of the linear fit (p(1)) represents the drift rate
+% drift_rate = p(1);
+% 
+% % Calculate k factor based on the drift rate
+% kfactor = 86400 / (86400 - drift_rate);
+% 
+% % Plotting the results
+% figure;
+% plot(datetime(all_utc_times, 'ConvertFrom', 'datenum'), all_lag_times / 5, '.r');
+% hold on;
+% plot(datetime(all_utc_times, 'ConvertFrom', 'datenum'), polyval(p, all_utc_times) / 5, '-b');
+% title('Lag-time between Aeris and LGR each 3-hour interval');
+% xlabel('Time [UTC]');
+% ylabel('Lag-time [s]');
+% legend('Lag-time Data', 'Linear Fit');
+% hold off;
+% 
+% % Display the calculated k factor
+% disp(['Calculated k factor: ', num2str(kfactor)]);
+
+disp(REG_LAG./5);
+
+toc
+end
