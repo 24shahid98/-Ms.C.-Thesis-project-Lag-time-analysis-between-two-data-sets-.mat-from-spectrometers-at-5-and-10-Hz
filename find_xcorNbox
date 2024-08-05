@@ -1,0 +1,101 @@
+%% Simplified xcorNbox funciton by Shahid Naqui 
+
+% This function checks the relationship between the fast and slow signals
+% by applying various "boxcar" filters, computing cross-coorelation at
+% different lags and performing regressio analysis to find the optimal
+% alignment and filtering parameters
+
+% the fast and slow signals have nothing to do with the frequency they are
+% analysing, it's just an old name for the to function inputs
+
+function reg = find_xcorNbox(fast_sig, slow_sig, max_lag, boxwidths)
+    % find_xcorNbox: Computes the cross-correlation and regression between fast and slow signals
+    % after applying a boxcar filter of varying widths and shifting to find the optimal lag.
+    %
+    % Inputs:
+    %   fast_sig  - Fast signal data
+    %   slow_sig  - Slow signal data
+    %   max_lag   - Maximum lag to consider for cross-correlation
+    %   boxwidths - Array of boxcar widths (positive, odd integers)
+    %
+    % Outputs:
+    %   reg       - Structure containing the best boxcar width, best lag, maximum correlation coefficient,
+    %               and other statistical metrics.
+    
+    % Initialize variables
+    num_widths  = length(boxwidths);
+    r           = NaN(max_lag, num_widths);
+    r_max       = NaN(num_widths, 1);
+    slope       = NaN(num_widths, 1);
+    sig_slp     = NaN(num_widths, 1);
+    slope_star  = NaN(num_widths, 1);
+    best_lags   = NaN(num_widths, 1);
+    
+    lags        = -max_lag:max_lag;
+    cols        = hot(num_widths);
+    
+    % this loop iterates over each boxcar width provided in "boxwidths"
+    for b_dex       = 1:num_widths 
+        boxwidth    = boxwidths(b_dex);
+        
+        % Apply boxcar filter:
+        % for each boxcar width, the "fast_sig" is filtered using "lagNbox"
+        % function
+        deteriorated_sig                    = lagNbox(fast_sig, 0, boxwidth);
+        deteriorated_sig(1:max(boxwidths))  = NaN;  % Set initial values to NaN
+        
+        % Ensure signals are finite in both signals
+        % replaces NaN values with the mean of finite values to maintain
+        % signal integrity
+        B_bothfinite                        = isfinite(deteriorated_sig) & isfinite(slow_sig);
+        mean_det                            = mean(deteriorated_sig(B_bothfinite));
+        deteriorated_sig(~B_bothfinite)     = mean_det;
+        mean_slow                           = mean(slow_sig(B_bothfinite));
+        slow_sig(~B_bothfinite)             = mean_slow;
+        
+        % Calculate cross-correlation:
+        % computes the cross-covariance between the "slow_sig" and the
+        % "deteriorated_sig". Then normalizes to get the cross-correlation.
+        % In the end, finds the lag that maximizes the cross-correlation
+        std_slow                            = std(slow_sig);
+        std_deteriorated                    = std(deteriorated_sig);
+        [est_xcov, x_lag]                   = xcov(slow_sig(max(boxwidths):end) - mean_slow, ...
+                                                    deteriorated_sig(max(boxwidths):end) - mean_det, ...
+                                                    max_lag, 'none');
+        est_xcorr                           = est_xcov / std_slow / std_deteriorated / (numel(slow_sig) - 1);
+        [max_xcorr, I]                      = max(est_xcorr);
+        best_lags(b_dex)                    = x_lag(I);  % Store the best lag for the current boxwidth
+        
+        % Adjust signal by the best lag
+        % shifts the deteriorated signal by the best lag found and adjusts
+        % the signal ends to maintain consistency after the shift
+        deteriorated_sig                                 = circshift(deteriorated_sig, best_lags(b_dex), 1);
+        if best_lags(b_dex) > 0
+            deteriorated_sig(1:best_lags(b_dex))         = mean_det;
+        elseif best_lags(b_dex) < 0
+            deteriorated_sig(end+best_lags(b_dex)+1:end) = mean_det;
+        end
+        
+        % Perform regression analysis between the adjusted deteriorated
+        % signal and the slow_sig, plus stores various regression metrics
+        % for each boxcar width
+        reg_all                     = reg_mg(deteriorated_sig(max(boxwidths):end), slow_sig(max(boxwidths):end));
+        r(1:length(lags), b_dex)    = est_xcorr;
+        r_max(b_dex)                = reg_all.r;
+        slope(b_dex)                = reg_all.b;
+        sig_slp(b_dex)              = reg_all.sig_b;
+        slope_star(b_dex)           = reg_all.b_star;
+    end
+    
+    % Determine the best boxwidth and lag
+    % Identifies the boxcar width and lag that yield the maximum
+    % correlation coefficient
+    [r_maxmax, J]   = max(r_max);
+    best_boxwidth   = boxwidths(J);
+    best_lag        = best_lags(J);
+    
+    % Output structure
+    reg = struct('best_boxwidth', best_boxwidth, 'best_lag', best_lag, 'r_maxmax', r_maxmax, ...
+                 'lags', lags, 'boxwidths', boxwidths, 'r', r, 'r_max', r_max, ...
+                 'slope', slope, 'sig_slp', sig_slp, 'slope_star', slope_star);
+end
